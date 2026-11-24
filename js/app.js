@@ -18,7 +18,7 @@
   const label = (t) => `<div class="label">${esc(t)}</div>`;
   const section = (t, right) => `<div class="section-label"><span>${esc(t)}</span>${right || ""}</div>`;
   const backHdr = (title, sub, back) => `<div class="hdr"><div class="hdr-left"><button class="back-btn" data-action="go" data-go="${back || "home"}" aria-label="Back">${ic("back")}</button><div><h1>${esc(title)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div></div></div>`;
-  const bellBtn = () => { const un = S().notifications.filter(n => !n.read).length; return `<button class="icon-btn" data-action="go" data-go="notifications" aria-label="Notifications">${ic("bell")}${un ? '<span class="dot"></span>' : ""}</button>`; };
+  const bellBtn = () => { const un = H.notices().filter(n => !n.read).length; return `<button class="icon-btn" data-action="go" data-go="notifications" aria-label="Notifications">${ic("bell")}${un ? '<span class="dot"></span>' : ""}</button>`; };
   const mainHdr = (title, sub, extra) => `<div class="hdr"><div><h1>${esc(title)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}${extra || ""}</div><div class="hdr-right">${bellBtn()}${avatar(H.user() || S().members[0])}</div></div>`;
   const cloudStatusLine = () => {
     if (!window.Cloud) return "Local mode";
@@ -50,12 +50,14 @@
   }
   function loanRow(l) {
     const m = H.member(l.memberId);
-    const amtCls = l.status === "overdue" ? "red-t" : l.status === "pending" ? "amber-t" : l.status === "cleared" || l.status === "rejected" ? "grey-t" : "white-t";
+    const amtCls = l.status === "overdue" ? "red-t" : l.status === "pending" || l.status === "approved" ? "amber-t" : l.status === "cleared" || l.status === "rejected" ? "grey-t" : "white-t";
     const extra = l.status === "overdue" ? `Overdue ${Math.max(1, Math.round((Date.now() - new Date(l.due)) / 86400000))} days` : null;
+    const int = H.loanInterest(l);
+    const state = l.due && l.status !== "cleared" ? " · due " + H.dateShort(l.due) : l.status === "cleared" ? " · repaid in full" : l.status === "approved" ? " · awaiting secretary" : " · awaiting vote";
     return `<button class="row" data-action="loan-detail" data-id="${l.id}">
       ${avatar(m, "sm")}
-      <span class="body"><span class="t1">${esc(m.name)}</span><div class="t2">${esc(l.purpose)}${l.due && l.status !== "cleared" ? " · due " + H.dateShort(l.due) : l.status === "cleared" ? " · repaid in full" : " · awaiting vote"}</div></span>
-      <span class="right"><div class="amt ${amtCls}">${H.fmt(l.status === "cleared" ? l.amount : l.balance)}</div>${pill(l.status, extra)}</span>
+      <span class="body"><span class="t1">${esc(m.name)}</span><div class="t2">${esc(l.purpose)}${int ? " · " + H.fmt(int) + " interest" : ""}${state}</div></span>
+      <span class="right"><div class="amt ${amtCls}">${H.fmt(l.status === "cleared" ? H.loanTotal(l) : l.balance)}</div>${pill(l.status, extra)}</span>
       ${ic("back", "chev")}
     </button>`;
   }
@@ -244,8 +246,10 @@
   function homeSecretary() {
     const s = S(); const t = H.totals();
     const recent = [...s.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+    const toPlan = s.loans.filter(l => l.status === "approved");
     return `<div class="page">
       <div class="hdr"><div><h1>${esc(s.circle.name)}</h1><div class="sub">${s.members.length} active members</div><div style="margin-top:6px"><span class="code-chip">${esc(s.circle.id)}</span></div></div><div class="hdr-right">${bellBtn()}${avatar(H.user())}</div></div>
+      ${toPlan.length ? `<button class="banner amber" data-action="loan-detail" data-id="${toPlan[0].id}"><span class="warn-ico">${ic("coins")}</span><span class="grow">${toPlan.length} approved loan${toPlan.length === 1 ? "" : "s"} waiting for a repayment plan</span><span class="link">Set up &#8594;</span></button>` : ""}
       ${t.pendingRequests || t.pendingVerify ? `<button class="banner amber" data-action="go" data-go="${t.pendingRequests ? "requests" : "queue"}"><span class="warn-ico">${ic("warn")}</span><span class="grow">${t.pendingRequests} membership request${t.pendingRequests === 1 ? "" : "s"} · ${t.pendingVerify} contribution${t.pendingVerify === 1 ? "" : "s"} pending verification</span><span class="link">Review &#8594;</span></button>` : ""}
       ${section("Financial overview")}
       <div class="grid2">
@@ -310,6 +314,7 @@
   function homeChair() {
     const s = S(); const t = H.totals();
     const pendingLoans = s.loans.filter(l => l.status === "pending");
+    const approvedLoans = s.loans.filter(l => l.status === "approved");
     const openProps = s.proposals.filter(p => p.status === "open");
     const paid = s.transactions.filter(t => t.type === "contribution" && (t.status === "paid" || t.status === "partial"));
     const nowTotal = paid.reduce((a, t) => a + t.amount, 0);
@@ -328,8 +333,9 @@
       ${section("Pending approvals")}
       <div class="list">
         ${pendingLoans.map(l => { const m = H.member(l.memberId); return `<div class="row"><span class="ico a">${ic("coins")}</span><span class="body"><span class="t1">Loan application</span><div class="t2">By ${esc(m.name)} — ${esc(l.purpose)}</div><div class="amt white-t" style="margin-top:3px">${H.fmt(l.amount)}</div></span><button class="btn tint sm" style="width:auto" data-action="loan-detail" data-id="${l.id}">Review</button></div>`; }).join("")}
+        ${approvedLoans.map(l => { const m = H.member(l.memberId); return `<div class="row"><span class="ico g">${ic("check")}</span><span class="body"><span class="t1">Approved — with the secretary</span><div class="t2">${esc(m.name)} — ${esc(l.purpose)}</div><div class="amt white-t" style="margin-top:3px">${H.fmt(l.amount)}</div></span><button class="btn tint sm" style="width:auto" data-action="loan-detail" data-id="${l.id}">View</button></div>`; }).join("")}
         ${openProps.map(p => `<div class="row"><span class="ico b">${ic("gavel")}</span><span class="body"><span class="t1">Vote in progress</span><div class="t2">${esc(p.title)}</div><div class="t2">${p.yes.length} yes · ${p.no.length} no · closes ${H.dateShort(p.closes)}</div></span><button class="btn tint sm" style="width:auto" data-action="go" data-go="proposals">Open</button></div>`).join("")}
-        ${!pendingLoans.length && !openProps.length ? '<div class="empty">Nothing waiting for approval. The circle is running cleanly.</div>' : ""}
+        ${!pendingLoans.length && !approvedLoans.length && !openProps.length ? '<div class="empty">Nothing waiting for approval. The circle is running cleanly.</div>' : ""}
       </div>
       ${section("Governance")}
       <div class="list">
@@ -416,7 +422,7 @@
     const s = S(); const t = H.totals();
     let loans = [...s.loans];
     if (UI.loanFilter !== "all") loans = loans.filter(l => l.status === UI.loanFilter);
-    loans.sort((a, b) => (a.status === "pending" ? -1 : 0) - (b.status === "pending" ? -1 : 0) || b.applied.localeCompare(a.applied));
+    loans.sort((a, b) => { const rank = (l) => l.status === "pending" ? 0 : l.status === "approved" ? 1 : 2; return rank(a) - rank(b) || b.applied.localeCompare(a.applied); });
     const rate = H.recoveryRate();
     return `<div class="page">
       ${mainHdr("Loans", s.circle.name)}
@@ -424,7 +430,7 @@
         <div class="card">${label("Outstanding")}${money(t.outstanding, "red-t", "md")}</div>
         <div class="card">${label("Recovery rate")}<div class="money green-t" style="font-size:17px">${rate}%</div><div class="progress ${rate >= 80 ? "" : "amber"}"><i style="width:${rate}%"></i></div></div>
       </div>
-      <div class="chips">${[["all", "All"], ["active", "Active"], ["pending", "Pending"], ["overdue", "Overdue"], ["cleared", "Cleared"]].map(([k, n]) => `<button class="chip ${UI.loanFilter === k ? "on" : ""}" data-action="loan-filter" data-k="${k}">${n}</button>`).join("")}</div>
+      <div class="chips">${[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["active", "Active"], ["overdue", "Overdue"], ["cleared", "Cleared"]].map(([k, n]) => `<button class="chip ${UI.loanFilter === k ? "on" : ""}" data-action="loan-filter" data-k="${k}">${n}</button>`).join("")}</div>
       ${section("Loan book")}
       <div class="list">${loans.map(loanRow).join("") || '<div class="empty">No loans in this view.</div>'}</div>
       <button class="btn primary" data-action="go" data-go="loan-new">${ic("plus")} New loan application</button>
@@ -441,10 +447,10 @@
       <form data-form="loan-apply" style="display:flex;flex-direction:column;gap:14px">
         <div class="field">${label("Amount (UGX)")}<input class="input" name="amount" inputmode="numeric" placeholder="e.g. 200,000" required style="font-size:18px;font-weight:700"></div>
         <div class="field">${label("Purpose")}<input class="input" name="purpose" placeholder="e.g. School fees, business stock" required minlength="3"></div>
-        <div class="field">${label("Repay by")}<input class="input" name="due" type="date" required min="${new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)}" value="${new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)}"></div>
+        <div class="field">${label("Preferred repay date")}<input class="input" name="due" type="date" required min="${new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)}" value="${new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)}"></div>
         <div class="form-error" id="form-error" hidden></div>
         <button class="btn primary" type="submit">Submit application</button>
-        <div class="hint center">Applications are ${pill("pending")} until the chairperson approves after the circle vote.</div>
+        <div class="hint center">Applications are ${pill("pending")} until the chairperson approves. The secretary then confirms the repayment date and any interest.</div>
       </form>
     </div>${tabbar(H.isStaff() ? "finance" : "home")}`;
   };
@@ -661,7 +667,7 @@
   function reportRows() {
     const mo = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
     return [["savings", "Savings report", `CSV · ${mo} · all members`, "g"],
-      ["loans", "Loan report", `CSV · ${mo} · active & overdue`, "b"],
+      ["loans", "Loan report", `CSV · ${mo} · principal, interest & balances`, "b"],
       ["members", "Members report", `CSV · ${mo} · roles & status`, "n"],
       ["attendance", "Meeting attendance", `CSV · ${mo} · per member`, "a"],
       ["ledger", "Full financial ledger", `CSV · every transaction`, "n"]]
@@ -669,6 +675,7 @@
   }
   V.reports = () => {
     const t = H.totals();
+    const interest = S().loans.reduce((a, l) => a + H.loanInterest(l), 0);
     return `<div class="page">
       ${mainHdr("Reports", S().circle.name)}
       <div class="glass">${label("This month's summary")}
@@ -676,6 +683,7 @@
           <div>${label("Total savings")}${money(t.moneyIn, "green-t", "md")}</div>
           <div>${label("Loan recovery")}<div class="money white-t" style="font-size:17px">${H.recoveryRate()}%</div></div>
         </div>
+        <div class="kv" style="margin-top:10px;padding-bottom:0"><span class="k">Loan interest charged</span><span class="v">${H.fmt(interest)}</span></div>
       </div>
       ${section("Available reports")}
       <div class="list">${reportRows()}</div>
@@ -710,8 +718,8 @@
     ${backHdr("Circle constitution", S().circle.name, "home")}
     ${[["1 · Membership", "Open to adults introduced by a member. Joining requires the circle code and secretary approval. Every member saves the agreed monthly amount."],
       ["2 · Contributions", `Each member contributes ${H.fmt(S().circle.expectedMonthly)} monthly, due before the meeting. Partial payments are recorded honestly as PARTIAL; waivers need a circle vote.`],
-      ["3 · Loans", "Members may borrow up to 3× their savings. Loans are voted on at a meeting, approved by the chairperson, and repaid by the agreed date. Overdue loans are flagged to everyone."],
-      ["4 · Roles", "The secretary records. The treasurer verifies every payment against receipts. The chairperson approves loans and closes votes. Elections are held every two years."],
+      ["3 · Loans", "Members may borrow up to 3× their savings. Loans are voted on at a meeting and approved by the chairperson. The secretary then sets the repayment date and any interest — interest is optional and is calculated by the system. Overdue loans are flagged to everyone."],
+      ["4 · Roles", "The secretary records and sets each approved loan's repayment plan. The treasurer verifies every payment against receipts. The chairperson approves loans and closes votes. Elections are held every two years."],
       ["5 · Meetings", "Monthly, with a quorum of two-thirds. Attendance and every decision are recorded. Minutes are shared before the next meeting."],
       ["6 · Records", "Every change is kept in the audit history. No record is silently deleted — corrections are proposed, voted, and logged."]]
       .map(([t, b]) => `<div class="card"><div style="font-weight:700;font-size:13.5px;margin-bottom:6px">${esc(t)}</div><div class="hint" style="margin:0">${esc(b)}</div></div>`).join("")}
@@ -734,7 +742,7 @@
 
   /* ---------- notifications & more ---------- */
   V.notifications = () => {
-    const ns = S().notifications;
+    const ns = H.notices();
     return `<div class="page">
       ${backHdr("Notifications", ns.filter(n => !n.read).length + " unread", "home")}
       ${ns.some(n => !n.read) ? `<button class="btn tint sm" data-action="read-all">Mark all as read</button>` : ""}
@@ -802,17 +810,32 @@
     const l = S().loans.find(x => x.id === id); if (!l) return;
     const m = H.member(l.memberId);
     const canApprove = H.role() === "chairperson" && l.status === "pending";
+    const canPlan = H.role() === "secretary" && l.status === "approved";
+    const int = H.loanInterest(l);
+    const total = H.loanTotal(l);
+    const dueVal = l.due ? new Date(l.due).toISOString().slice(0, 10) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
     openSheet(`<h3>Loan — ${esc(m.name)}</h3>
-      <div class="glass">${label(l.status === "cleared" ? "Amount (repaid)" : "Balance")}${money(l.status === "cleared" ? l.amount : l.balance, l.status === "overdue" ? "red-t" : "white-t", "big")}<div style="margin-top:8px">${pill(l.status)}</div></div>
+      <div class="glass">${label(l.status === "cleared" ? "Amount (repaid)" : "Balance")}${money(l.status === "cleared" ? total : l.balance, l.status === "overdue" ? "red-t" : "white-t", "big")}<div style="margin-top:8px">${pill(l.status)}</div></div>
       <div>
         <div class="kv"><span class="k">Purpose</span><span class="v">${esc(l.purpose)}</span></div>
+        <div class="kv"><span class="k">Principal</span><span class="v">${H.fmt(l.amount)}</span></div>
+        <div class="kv"><span class="k">Interest${l.interestRate != null ? " (" + l.interestRate + "%)" : ""}</span><span class="v">${int ? H.fmt(int) : '<span class="grey-t">None</span>'}</span></div>
+        ${int ? `<div class="kv"><span class="k">Total repayable</span><span class="v white-t">${H.fmt(total)}</span></div>` : ""}
         <div class="kv"><span class="k">Applied</span><span class="v">${H.date(l.applied)}</span></div>
         ${l.due ? `<div class="kv"><span class="k">Due</span><span class="v ${l.status === "overdue" ? "red-t" : ""}">${H.date(l.due)}</span></div>` : ""}
         <div class="kv"><span class="k">Member savings</span><span class="v">${H.fmt(H.savingsOf(m.id))}</span></div>
       </div>
-      ${canApprove ? `<div class="hint">The circle votes at the meeting; as chairperson you record the outcome.</div>
+      ${canApprove ? `<div class="hint">The circle votes at the meeting; as chairperson you record the outcome. The secretary then sets the repayment date and any interest.</div>
       <div class="btn-row"><button class="btn primary" data-action="loan-approve" data-id="${l.id}">Approve</button><button class="btn danger" data-action="loan-reject" data-id="${l.id}">Reject</button></div>` : ""}
-      ${l.status === "active" || l.status === "overdue" ? `<button class="btn tint" data-action="go" data-go="record/repayment" data-member="${m.id}">${ic("wallet")} Record repayment</button>` : ""}
+      ${canPlan ? `<form data-form="loan-finalize" data-id="${l.id}" style="display:flex;flex-direction:column;gap:12px;margin-top:4px">
+        <div class="hint" style="margin:0">Approved by the chairperson. Set when it must be repaid and any interest — the interest amount is worked out for you.</div>
+        <div class="field">${label("Repay by")}<input class="input" name="due" type="date" required value="${dueVal}"></div>
+        <div class="field">${label("Interest (%) — leave blank or 0 for none")}<input class="input" name="rate" inputmode="decimal" placeholder="e.g. 10" value="${l.interestRate != null ? l.interestRate : ""}"></div>
+        <div class="form-error" id="form-error" hidden></div>
+        <button class="btn primary" type="submit">Confirm repayment plan</button>
+      </form>` : ""}
+      ${l.status === "approved" && !canPlan ? `<div class="hint center">Approved by the chairperson — waiting for the secretary to set the repayment date and interest.</div>` : ""}
+      ${l.status === "active" || l.status === "overdue" || l.status === "approved" ? `<button class="btn tint" data-action="go" data-go="record/repayment" data-member="${m.id}">${ic("wallet")} Record repayment</button>` : ""}
       ${l.status === "pending" && !canApprove ? `<div class="hint center">Waiting for the chairperson after the circle vote.</div>` : ""}
       <button class="btn outline sm" data-action="close-sheet">Close</button>`);
   }
@@ -896,8 +919,10 @@
       ms.forEach(m => rows.push([m.name, H.savingsOf(m.id), H.loanOf(m.id)]));
       csvDownload(`circle-${kind}-report.csv`, rows);
     } else if (kind === "loans") {
-      const rows = [["Member", "Purpose", "Amount", "Balance", "Status", "Due"]];
-      s.loans.forEach(l => rows.push([H.member(l.memberId).name, l.purpose, l.amount, l.balance, l.status, l.due ? H.date(l.due) : ""]));
+      const rows = [["Member", "Purpose", "Principal (UGX)", "Interest rate (%)", "Interest (UGX)", "Total (UGX)", "Balance (UGX)", "Status", "Due"]];
+      s.loans.forEach(l => rows.push([H.member(l.memberId).name, l.purpose, l.amount, l.interestRate != null ? l.interestRate : 0, H.loanInterest(l), H.loanTotal(l), l.balance, l.status, l.due ? H.date(l.due) : ""]));
+      const sum = (f) => s.loans.reduce((a, l) => a + f(l), 0);
+      rows.push(["TOTAL", "", sum(l => l.amount), "", sum(l => H.loanInterest(l)), sum(l => H.loanTotal(l)), sum(l => l.balance), "", ""]);
       csvDownload("circle-loan-report.csv", rows);
     } else if (kind === "members") {
       const rows = [["Name", "Phone", "Role", "Joined", "Savings (UGX)"]];
@@ -968,7 +993,7 @@
       if (!Array.isArray(S().verifications)) S().verifications = [];
       S().verifications.unshift({ id: Store.uid(), transactionId: t.id, memberId: t.memberId || null, status: "paid", verifiedBy: verifier ? verifier.id : null, note: TX_META[t.type].name + " " + H.fmt(t.amount), date: when });
       if (t.type === "repayment" && t.memberId) {
-        const loan = S().loans.find(l => l.memberId === t.memberId && (l.status === "active" || l.status === "overdue"));
+        const loan = S().loans.find(l => l.memberId === t.memberId && (l.status === "active" || l.status === "overdue" || l.status === "approved"));
         if (loan) { loan.balance = Math.max(0, loan.balance - t.amount); if (loan.balance === 0) { loan.status = "cleared"; } else if (loan.status === "overdue" && new Date(loan.due) > new Date()) loan.status = "active"; }
       }
       Store.save();
@@ -1008,12 +1033,14 @@
     },
     "loan-approve": (el) => {
       const s = S(); const l = s.loans.find(x => x.id === el.dataset.id); if (!l) return;
-      l.status = "active"; l.due = l.due || new Date(Date.now() + 30 * 86400000).toISOString();
+      l.status = "approved"; l.approvedAt = new Date().toISOString(); l.approvedBy = H.user().id;
       s.transactions.push({ id: Store.uid(), type: "disbursement", memberId: l.memberId, amount: l.amount, method: "Mobile money", date: new Date().toISOString(), status: "recorded", note: l.purpose + " loan", recordedBy: H.user().id });
       Store.save();
       const m = H.member(l.memberId);
-      H.audit(`${H.user().name} approved loan — ${m.name}, ${H.fmt(l.amount)}`); H.notify(`Loan approved: ${m.name} — ${H.fmt(l.amount)}.`);
-      closeSheet(); toast("Loan approved — disbursement recorded"); render();
+      H.audit(`${H.user().name} approved loan — ${m.name}, ${H.fmt(l.amount)}`);
+      H.notify(`Loan approved: ${m.name} — ${H.fmt(l.amount)}. Secretary: set the repayment date and any interest, then confirm the plan.`, ["secretary"]);
+      H.notify(`Your loan of ${H.fmt(l.amount)} was approved — the secretary will confirm the repayment plan.`, [l.memberId]);
+      closeSheet(); toast("Loan approved — secretary notified to set the repayment plan"); render();
     },
     "loan-reject": (el) => {
       const l = S().loans.find(x => x.id === el.dataset.id); if (!l) return;
@@ -1063,7 +1090,7 @@
           <button class="btn primary" type="submit">Open vote</button>
         </form>`);
     },
-    "read-all": () => { S().notifications.forEach(n => n.read = true); Store.save(); render(); },
+    "read-all": () => { H.notices().forEach(n => n.read = true); Store.save(); render(); },
     download: (el) => downloadReport(el.dataset.report),
     "share-summary": () => {
       const t = H.totals(); const s = S();
@@ -1200,17 +1227,38 @@
       H.notify(`Your contribution of ${H.fmt(amount)} is pending verification.`);
       toast("Contribution submitted — pending verification"); go("passbook");
     },
+    "loan-finalize": (f, form) => {
+      const l = S().loans.find(x => x.id === form.dataset.id); if (!l) return;
+      const due = f.due.value ? new Date(f.due.value + "T12:00:00") : null;
+      if (!due || isNaN(due)) return formError("Pick the repayment date.");
+      const rate = Number(String(f.rate.value || "0").replace(/[^\d.]/g, "")) || 0;
+      if (rate < 0 || rate > 100) return formError("Enter an interest rate between 0 and 100%.");
+      const interest = Math.round(l.amount * rate / 100);
+      const repaid = Math.max(0, l.amount - l.balance);
+      l.due = due.toISOString();
+      l.interestRate = rate;
+      l.interest = interest;
+      l.total = l.amount + interest;
+      l.balance = Math.max(0, l.total - repaid);
+      l.status = l.balance === 0 ? "cleared" : "active";
+      l.plannedAt = new Date().toISOString(); l.plannedBy = H.user().id;
+      Store.save();
+      const m = H.member(l.memberId);
+      H.audit(`${H.user().name} set loan terms — ${m.name}, due ${H.date(l.due)}, ${interest ? "interest " + rate + "% (" + H.fmt(interest) + ")" : "no interest"}`);
+      H.notify(`Repayment plan set: ${m.name} — ${H.fmt(l.balance)} by ${H.date(l.due)}${interest ? ", includes " + H.fmt(interest) + " interest" : ""}.`, [l.memberId]);
+      closeSheet(); toast("Repayment plan saved"); render();
+    },
     "loan-apply": (f) => {
       const s = S(); const u = H.user();
       const amount = num(f.amount.value);
       const max = H.savingsOf(u.id) * 3;
       if (amount < 10000) return formError("Minimum loan is UGX 10,000.");
       if (amount > max) return formError(`Above your limit of ${H.fmt(max)} (3× savings).`);
-      if (s.loans.some(l => l.memberId === u.id && l.status === "pending")) return formError("You already have an application awaiting a vote.");
+      if (s.loans.some(l => l.memberId === u.id && (l.status === "pending" || l.status === "approved"))) return formError("You already have a loan awaiting a decision.");
       s.loans.push({ id: Store.uid(), memberId: u.id, purpose: f.purpose.value.trim(), amount, balance: amount, due: new Date(f.due.value).toISOString(), status: "pending", applied: new Date().toISOString() });
       Store.save();
       H.audit(`${u.name} applied for a loan — ${H.fmt(amount)}, ${f.purpose.value.trim()}`);
-      H.notify(`Loan application received: ${H.fmt(amount)} — goes to the next meeting vote.`);
+      H.notify(`Loan application received: ${H.fmt(amount)} — goes to the next meeting vote.`, ["chairperson"]);
       toast("Application submitted — the circle votes next meeting"); go("loans");
     },
     record: (f, form) => {

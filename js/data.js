@@ -196,7 +196,7 @@
       const sum = (f) => s.transactions.filter(f).reduce((a, t) => a + t.amount, 0);
       const moneyIn = sum(t => (t.type === "contribution" || t.type === "repayment") && (t.status === "paid" || t.status === "partial"));
       const moneyOut = sum(t => (t.type === "disbursement" || t.type === "expense") && t.status !== "pending");
-      const outstanding = s.loans.filter(l => l.status === "active" || l.status === "overdue").reduce((a, l) => a + l.balance, 0);
+      const outstanding = s.loans.filter(l => l.status === "active" || l.status === "overdue" || l.status === "approved").reduce((a, l) => a + l.balance, 0);
       const pendingVerify = s.transactions.filter(t => t.status === "pending").length;
       const pendingRequests = s.requests.filter(r => r.status === "pending").length;
       const overdue = s.loans.filter(l => l.status === "overdue").length;
@@ -216,11 +216,19 @@
       });
       return by;
     },
-    loanOf(id) { const s = H.sacco(); return s ? s.loans.filter(l => l.memberId === id && (l.status === "active" || l.status === "overdue")).reduce((a, l) => a + l.balance, 0) : 0; },
+    loanOf(id) { const s = H.sacco(); return s ? s.loans.filter(l => l.memberId === id && (l.status === "active" || l.status === "overdue" || l.status === "approved")).reduce((a, l) => a + l.balance, 0) : 0; },
+    /* Loans saved before interest existed have no interest/total fields —
+       they read as 0 interest and total = principal, so old data is unchanged. */
+    loanInterest: (l) => (l && l.interest) || 0,
+    loanTotal: (l) => {
+      if (!l) return 0;
+      if (l.total != null) return l.total;
+      return (l.amount || 0) + ((l.interest) || 0);
+    },
     recoveryRate() {
       const s = H.sacco(); if (!s) return 100;
-      const lent = s.loans.reduce((a, l) => a + l.amount, 0);
-      const out = s.loans.filter(l => l.status === "active" || l.status === "overdue").reduce((a, l) => a + l.balance, 0);
+      const lent = s.loans.reduce((a, l) => a + H.loanTotal(l), 0);
+      const out = s.loans.filter(l => l.status === "active" || l.status === "overdue" || l.status === "approved").reduce((a, l) => a + l.balance, 0);
       return lent ? Math.round(((lent - out) / lent) * 100) : 100;
     },
     attendanceRate() {
@@ -240,10 +248,20 @@
       s.audit.unshift({ id: uid(), text, date: new Date().toISOString() });
       Store.save();
     },
-    notify(text) {
+    /* `to` optionally targets a notification: a role ("secretary") or member ids.
+       Notifications without `to` stay visible to everyone, like before. */
+    notify(text, to) {
       const s = H.sacco(); if (!s) return;
-      s.notifications.unshift({ id: uid(), text, date: new Date().toISOString(), read: false });
+      const n = { id: uid(), text, date: new Date().toISOString(), read: false };
+      if (to) { const list = Array.isArray(to) ? to.filter(Boolean) : [to]; if (list.length) n.to = list; }
+      s.notifications.unshift(n);
       Store.save();
+    },
+    notices() {
+      const s = H.sacco(); if (!s || !Array.isArray(s.notifications)) return [];
+      const role = H.role();
+      const me = Store.state && Store.state.session ? Store.state.session.memberId : null;
+      return s.notifications.filter(n => !n || !n.to || !n.to.length || n.to.includes(role) || (me && n.to.includes(me)));
     },
     savingsSeries(months) {
       const s = H.sacco(); const now = new Date(); const pts = [];
