@@ -263,6 +263,7 @@
         <button class="tile horiz" data-action="go" data-go="record/contribution">${ic("coins")} Record contribution</button>
         <button class="tile horiz" data-action="go" data-go="register-member">${ic("user-plus")} Register member</button>
         <button class="tile horiz" data-action="go" data-go="record/repayment">${ic("wallet")} Record repayment</button>
+        <button class="tile horiz" data-action="loan-record">${ic("coins")} Record a loan given out</button>
         <button class="tile horiz" data-action="go" data-go="meeting-new">${ic("meetings")} Create meeting</button>
       </div>
       ${section("Needs attention")}
@@ -433,6 +434,7 @@
       <div class="chips">${[["all", "All"], ["pending", "Pending"], ["approved", "Approved"], ["active", "Active"], ["overdue", "Overdue"], ["cleared", "Cleared"]].map(([k, n]) => `<button class="chip ${UI.loanFilter === k ? "on" : ""}" data-action="loan-filter" data-k="${k}">${n}</button>`).join("")}</div>
       ${section("Loan book")}
       <div class="list">${loans.map(loanRow).join("") || '<div class="empty">No loans in this view.</div>'}</div>
+      ${H.role() === "secretary" ? `<button class="btn tint" data-action="loan-record">${ic("coins")} Record a loan given out</button>` : ""}
       <button class="btn primary" data-action="go" data-go="loan-new">${ic("plus")} New loan application</button>
     </div>${tabbar(H.isStaff() ? "finance" : "home")}`;
   };
@@ -964,6 +966,26 @@
     "loan-filter": (el) => { UI.loanFilter = el.dataset.k; render(); },
     "tx-detail": (el) => txSheet(el.dataset.id),
     "loan-detail": (el) => loanSheet(el.dataset.id),
+    "loan-record": () => {
+      if (H.role() !== "secretary") return;
+      const s = S();
+      const today = new Date().toISOString().slice(0, 10);
+      const later = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      openSheet(`<h3>Record a loan given out</h3>
+        <div class="hint">Use this when the circle has already agreed a loan and the money has been handed out. It is added to the loan book straight away.</div>
+        <form data-form="loan-record" style="display:flex;flex-direction:column;gap:12px">
+          <div class="field">${label("Taken by")}<select class="input" name="memberId" required>${s.members.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select></div>
+          <div class="field">${label("Amount given (UGX)")}<input class="input" name="amount" inputmode="numeric" placeholder="e.g. 200,000" required style="font-size:18px;font-weight:700"></div>
+          <div class="field">${label("Purpose")}<input class="input" name="purpose" placeholder="e.g. School fees, business stock" required minlength="3"></div>
+          <div class="field">${label("Date given")}<input class="input" name="taken" type="date" required max="${today}" value="${today}"></div>
+          <div class="field">${label("How it was paid out")}<select class="input" name="method"><option>Cash</option><option>Mobile money</option><option>Bank</option></select></div>
+          <div class="field">${label("Repay by")}<input class="input" name="due" type="date" required value="${later}"></div>
+          <div class="field">${label("Interest (%) — leave blank or 0 for none")}<input class="input" name="rate" inputmode="decimal" placeholder="e.g. 10"></div>
+          <div class="hint" style="margin:0">The interest amount and total repayable are worked out from the rate and shown on the loan.</div>
+          <div class="form-error" id="form-error" hidden></div>
+          <button class="btn primary" type="submit">Save loan</button>
+        </form>`);
+    },
     copy: (el) => {
       const text = el.dataset.copy;
       const done = () => toast("Copied: " + text);
@@ -1247,6 +1269,29 @@
       H.audit(`${H.user().name} set loan terms — ${m.name}, due ${H.date(l.due)}, ${interest ? "interest " + rate + "% (" + H.fmt(interest) + ")" : "no interest"}`);
       H.notify(`Repayment plan set: ${m.name} — ${H.fmt(l.balance)} by ${H.date(l.due)}${interest ? ", includes " + H.fmt(interest) + " interest" : ""}.`, [l.memberId]);
       closeSheet(); toast("Repayment plan saved"); render();
+    },
+    "loan-record": (f) => {
+      if (H.role() !== "secretary") return;
+      const s = S();
+      const amount = num(f.amount.value);
+      if (amount < 1000) return formError("Enter an amount of at least UGX 1,000.");
+      const m = H.member(f.memberId.value); if (!m) return formError("Choose the member who took the loan.");
+      const purpose = f.purpose.value.trim(); if (purpose.length < 3) return formError("Add a short purpose.");
+      const taken = f.taken.value ? new Date(f.taken.value + "T12:00:00") : new Date();
+      if (isNaN(taken)) return formError("Pick the date the money was given.");
+      const due = f.due.value ? new Date(f.due.value + "T12:00:00") : null;
+      if (!due || isNaN(due)) return formError("Pick the repayment date.");
+      if (due < taken) return formError("Repayment date must be after the date given.");
+      const rate = Number(String(f.rate.value || "0").replace(/[^\d.]/g, "")) || 0;
+      if (rate < 0 || rate > 100) return formError("Enter an interest rate between 0 and 100%.");
+      const interest = Math.round(amount * rate / 100);
+      const total = amount + interest;
+      s.loans.push({ id: Store.uid(), memberId: m.id, purpose, amount, balance: total, due: due.toISOString(), status: "active", applied: taken.toISOString(), interestRate: rate, interest, total, approvedAt: taken.toISOString(), approvedBy: H.user().id, plannedAt: new Date().toISOString(), plannedBy: H.user().id, recordedBy: H.user().id });
+      s.transactions.push({ id: Store.uid(), type: "disbursement", memberId: m.id, amount, method: f.method.value, date: taken.toISOString(), status: "recorded", note: purpose + " loan", recordedBy: H.user().id });
+      Store.save();
+      H.audit(`${H.user().name} recorded a loan — ${m.name}, ${H.fmt(amount)}${interest ? ", interest " + rate + "% (" + H.fmt(interest) + ")" : ", no interest"}, due ${H.date(due.toISOString())}`);
+      H.notify(`Loan recorded for ${m.name}: ${H.fmt(amount)} given on ${H.date(taken.toISOString())} — repay ${H.fmt(total)} by ${H.date(due.toISOString())}${interest ? ", includes " + H.fmt(interest) + " interest" : ""}.`, [m.id]);
+      closeSheet(); toast("Loan recorded in the loan book"); render();
     },
     "loan-apply": (f) => {
       const s = S(); const u = H.user();
